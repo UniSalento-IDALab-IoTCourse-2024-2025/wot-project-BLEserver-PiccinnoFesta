@@ -30,6 +30,7 @@ TIME_SENSOR = {
 }
 
 # Parametri per il blocco “values”
+
 VALUE_SENSOR = {
     "file_name":     "IMU_values.bin",
     "channels": [
