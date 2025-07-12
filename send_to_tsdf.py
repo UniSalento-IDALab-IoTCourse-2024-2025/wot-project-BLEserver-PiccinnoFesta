@@ -1,74 +1,48 @@
 #!/usr/bin/env python3
 import requests
-import shutil
 import time
-import sys
 from pathlib import Path
+import shutil
 
-# ——— Configurazione —————————————————————————————————————————
-SERVER_URL = "http://192.168.1.101:4000/api/tsdf"
-TSDF_BASE  = Path.home() / "toSendData" / "tsdf_output"
-SENT_DIR   = TSDF_BASE / "sent"
-WINDOW_SEC = 60
+# ——— CONFIG —————————————————————————
+TSDF_DIR  = Path.home() / "toSendData" / "tsdf_output"
+SENT_DIR  = Path.home() / "toSendData" / "sent"
+TSDF_INGEST_URL = "http://172.20.10.4:4000/api/tsdf"
 
-# Assicuriamoci che la cartella per i segmenti inviati esista
+TSDF_DIR.mkdir(parents=True, exist_ok=True)
 SENT_DIR.mkdir(parents=True, exist_ok=True)
 
-def send_segment(segment_dir: Path) -> bool:
-    """Invia i file di uno segment e ritorna True se OK."""
-    seg_name = segment_dir.name  # e.g. "segment0"
-    meta_f   = segment_dir / "IMU_meta.json"
-    time_f   = segment_dir / "IMU_time.bin"
-    vals_f   = segment_dir / "IMU_values.bin"
-
-    # Controlla esistenza
-    for f in (meta_f, time_f, vals_f):
-        if not f.exists():
-            print(f"[{seg_name}] file mancante: {f}", file=sys.stderr)
-            return False
-
+def upload_segment(out_dir: Path):
     files = {
-        "segment": (None, seg_name),  # campo form con il nome del segmento
-        "metadata": (meta_f.name, open(meta_f, "rb"), "application/json"),
-        "time":     (time_f.name, open(time_f, "rb"), "application/octet-stream"),
-        "values":   (vals_f.name, open(vals_f, "rb"), "application/octet-stream"),
+        "metadata": ("IMU_meta.json", open(out_dir / "IMU_meta.json", "rb"), "application/json"),
+        "time":     ("IMU_time.bin",  open(out_dir / "IMU_time.bin",  "rb"), "application/octet-stream"),
+        "values":   ("IMU_values.bin",open(out_dir / "IMU_values.bin","rb"), "application/octet-stream")
     }
-
-    print(f"[{seg_name}] Invio a {SERVER_URL} …", end="", flush=True)
     try:
-        resp = requests.post(SERVER_URL, files=files, timeout=30)
+        resp = requests.post(TSDF_INGEST_URL, files=files)
         resp.raise_for_status()
-    except requests.RequestException as e:
-        print(" fallito:", e)
+        print(f"✅ Segmento {out_dir.name} caricato.")
+        return True
+    except Exception as e:
+        print(f"❌ Errore nel caricamento {out_dir.name}: {e}")
         return False
-
-    print(" OK:", resp.status_code)
-    return True
+    finally:
+        for f in files.values():
+            f[1].close()
 
 def main():
-    print(f"Inizio send_tsdf loop (ogni {WINDOW_SEC}s)")
+    print("Avvio invio continuo dei segmenti ogni 10 secondi…")
     while True:
-        # Scansiona segmentN in ordine
-        segments = sorted(
-            [d for d in TSDF_BASE.iterdir() if d.is_dir() and d.name.startswith("segment")],
-            key=lambda p: int(p.name.replace("segment", "")) if p.name.replace("segment","").isdigit() else p.name
-        )
+        segments = sorted([d for d in TSDF_DIR.iterdir() if d.is_dir() and d.name.startswith("segment")])
         if not segments:
-            print("Nessun segment da inviare. Attendo…")
+            print("🕐 Nessun segmento da inviare.")
         for seg in segments:
-            if send_segment(seg):
-                # sposta in sent/
-                target = SENT_DIR / seg.name
-                print(f"[{seg.name}] Sposto in {target}")
-                shutil.move(str(seg), str(target))
-            else:
-                print(f"[{seg.name}] Riprovo al prossimo giro.")
-        # Attendo la prossima finestra
-        time.sleep(WINDOW_SEC)
+            if upload_segment(seg):
+                dest = SENT_DIR / seg.name
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.move(str(seg), str(dest))
+        time.sleep(10)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nTerminato dall'utente.")
-        sys.exit(0)
+    main()

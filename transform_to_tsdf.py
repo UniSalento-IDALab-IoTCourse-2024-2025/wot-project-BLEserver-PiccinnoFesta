@@ -1,35 +1,31 @@
 #!/usr/bin/env python3
 import json
+import time
 from pathlib import Path
 import pandas as pd
 import numpy as np
 
-# ——— Configurazione —————————————————————————————————————————
-BUFFER_DIR = Path("toSendData/buffer")
-OUT_DIR    = Path("toSendData/tsdf_output/segment0")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+# ——— CONFIGURAZIONE —————————————————————————————————————————————
+BUFFER_DIR = Path.home() / "toSendData" / "buffer"
+OUT_BASE   = Path.home() / "toSendData" / "tsdf_output"
 
-# Metadati generali (adatta alle tue esigenze)
 META = {
-    "study_id":             "PPP",
-    "device_id":            "Verily Study Watch",
-    "subject_id":           "X",
-    "ppp_source_protobuf":  "WatchData.IMU.Week104.raw",
-    "metadata_version":     "0.1",
-    "endianness":           "little",
-    "data_type":            "float"
+    "study_id":            "PPP",
+    "device_id":           "Verily Study Watch",
+    "subject_id":          "X",
+    "ppp_source_protobuf": "WatchData.IMU.Week104.raw",
+    "metadata_version":    "0.1",
+    "endianness":          "little",
+    "data_type":           "float"
 }
 
-# Parametri per il blocco “time”
 TIME_SENSOR = {
     "file_name":     "IMU_time.bin",
     "channels":      ["time"],
-    "units":         ["iso8601"],
-    "bits":          64,
+    "units":         ["time_delta_ms"],
+    "bits":          32,
     "scale_factors": [1]
 }
-
-# Parametri per il blocco “values”
 
 VALUE_SENSOR = {
     "file_name":     "IMU_values.bin",
@@ -41,60 +37,99 @@ VALUE_SENSOR = {
         "m/s/s","m/s/s","m/s/s",
         "deg/s","deg/s","deg/s"
     ],
-    #scale:factors ad 1 perchè le unità sono già prese correttamente da smartwatch
-    "scale_factors": [1,1,1,1,1,1],
-    "bits":          64
+    "scale_factors": [
+        0.00469378, 0.00469378, 0.00469378,
+        0.06097561, 0.06097561, 0.06097561
+    ],
+    "bits": 64
 }
 
-# ——— 1) Leggi e aggrega i JSON ——————————————————————————————
-records = []
-for f in sorted(BUFFER_DIR.glob("reading-*.json")):
-    with open(f, "r") as fp:
-        rec = json.load(fp)
-    records.append({
-        "time":   rec["timestamp"],
-        "acc_x":  rec["accel"]["x"],
-        "acc_y":  rec["accel"]["y"],
-        "acc_z":  rec["accel"]["z"],
-        "gyro_x": rec["gyro"]["x"],
-        "gyro_y": rec["gyro"]["y"],
-        "gyro_z": rec["gyro"]["z"]
-    })
+OUT_BASE.mkdir(parents=True, exist_ok=True)
+BUFFER_DIR.mkdir(parents=True, exist_ok=True)
 
-if not records:
-    print("Nessun dato da processare.")
-    exit(0)
+def next_segment_index():
+    existing = [d.name for d in OUT_BASE.iterdir() if d.is_dir() and d.name.startswith("segment")]
+    nums = [int(name.replace("segment", "")) for name in existing if name.replace("segment", "").isdigit()]
+    return max(nums) + 1 if nums else 0
 
-df = pd.DataFrame(records).sort_values("time").reset_index(drop=True)
+def process_batch(segment_idx: int) -> bool:
+    buffer_files = sorted(BUFFER_DIR.glob("segment*_raw.json"))
+    if not buffer_files:
+        print(f"[segment{segment_idx}] nessun campione, aspetto…")
+        return False
 
-# ——— 2) Prepara i metadata finali ————————————————————————————
-meta = META.copy()
-meta.update({
-    "start_iso8601": df["time"].iloc[0],
-    "end_iso8601":   df["time"].iloc[-1],
-    "rows":          len(df),
-    "sensors": [
-        TIME_SENSOR,
-        VALUE_SENSOR
-    ]
-})
+    records = []
+    for f in buffer_files:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        for rec in data.get("samples", []):
+            records.append({
+                "time":   rec["timestamp"],
+                "acc_x":  rec["accel"]["x"],
+                "acc_y":  rec["accel"]["y"],
+                "acc_z":  rec["accel"]["z"],
+                "gyro_x": rec["gyro"]["x"],
+                "gyro_y": rec["gyro"]["y"],
+                "gyro_z": rec["gyro"]["z"]
+            })
+    if not records:
+        for f in buffer_files:
+            f.unlink()
+        return False
 
-# ——— 3) Scrivi IMU_time.bin —————————————————————————————————
-time_bin = OUT_DIR / TIME_SENSOR["file_name"]
-with open(time_bin, "w", encoding="utf-8") as f:
-    for t in df["time"]:
-        f.write(f"{t}\n")
+    # ✅ Gestione robusta del fuso orario
+    df = pd.DataFrame(records)
+    df["time"] = pd.to_datetime(df["time"])
+    if df["time"].dt.tz is None:
+        df["time"] = df["time"].dt.tz_localize("UTC")
+    else:
+        df["time"] = df["time"].dt.tz_convert("UTC")
 
-# ——— 4) Scrivi IMU_values.bin ——————————————————————————————
-vals = df[["acc_x","acc_y","acc_z","gyro_x","gyro_y","gyro_z"]].to_numpy(dtype=np.float64)
-vals_bin = OUT_DIR / VALUE_SENSOR["file_name"]
-with open(vals_bin, "wb") as f:
-    # numpy.tofile rispetta little-endian per default su Raspberry
-    vals.tofile(f)
+    meta = {
+        "study_id":            META["study_id"],
+        "device_id":           META["device_id"],
+        "subject_id":          META["subject_id"],
+        "ppp_source_protobuf": META["ppp_source_protobuf"],
+        "metadata_version":    META["metadata_version"],
+        "start_iso8601":       df["time"].iloc[0].isoformat(),
+        "end_iso8601":         df["time"].iloc[-1].isoformat(),
+        "rows":                len(df),
+        "endianness":          META["endianness"],
+        "data_type":           META["data_type"],
+        "sensors": [
+            TIME_SENSOR,
+            VALUE_SENSOR
+        ]
+    }
 
-# ——— 5) Scrivi IMU_meta.json ——————————————————————————————
-meta_file = OUT_DIR / "IMU_meta.json"
-with open(meta_file, "w", encoding="utf-8") as f:
-    json.dump(meta, f, indent=2)
+    out_dir = OUT_BASE / f"segment{segment_idx}"
+    out_dir.mkdir(exist_ok=True)
 
-print(f"TSDF creato in: {OUT_DIR}")
+    # 📦 Scrivi tempo relativo in ms dal primo campione
+    times = df["time"]
+    deltas_ms = (times - times.iloc[0]).dt.total_seconds() * 1e3
+    np.array(deltas_ms, dtype=np.float32).tofile(out_dir / TIME_SENSOR["file_name"])
+
+    # 📦 Scrivi valori sensore scalati
+    raw = df[["acc_x","acc_y","acc_z","gyro_x","gyro_y","gyro_z"]].to_numpy(dtype=np.float64)
+    sf = np.array(VALUE_SENSOR["scale_factors"], dtype=np.float64)
+    (raw * sf[np.newaxis, :]).tofile(out_dir / VALUE_SENSOR["file_name"])
+
+    with open(out_dir / "IMU_meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
+    for f in buffer_files:
+        f.unlink()
+
+    print(f"[segment{segment_idx}] TSDF creato con {len(df)} record.")
+    return True
+
+def main():
+    print("Inizio creazione TSDF…")
+    seg_idx = next_segment_index()
+    while True:
+        if process_batch(seg_idx):
+            seg_idx += 1
+        time.sleep(5)
+
+if __name__ == "__main__":
+    main()
