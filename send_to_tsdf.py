@@ -34,8 +34,14 @@ def get_presigned_url():
 def upload_zip_to_s3(zip_path: Path, presigned_url: str) -> bool:
     """Effettua l’upload del file ZIP al link firmato."""
     try:
+        headers = {'Content-Type': 'application/zip'} # Add this line
         with open(zip_path, "rb") as f:
-            put_resp = requests.put(presigned_url, data=f)
+            put_resp = requests.put(presigned_url, data=f, headers=headers) # Add headers=headers
+        
+        # It's helpful to print the status code and response text for debugging
+        if put_resp.status_code != 200:
+            print(f"S3 Upload Error: {put_resp.status_code} - {put_resp.text}")
+        
         return put_resp.status_code == 200
     except Exception as e:
         print(f"Errore durante l'upload S3: {e}")
@@ -43,7 +49,7 @@ def upload_zip_to_s3(zip_path: Path, presigned_url: str) -> bool:
 
 
 def upload_segment(out_dir: Path) -> bool:
-    """Effettua l’upload di un segmento, richiedendo nuovi URL finché non va a buon fine."""
+    """Effettua l’upload di un segmento, poi sposta solo lo zip se ha successo."""
     try:
         zip_path = out_dir.with_suffix(".zip")
         shutil.make_archive(base_name=str(zip_path).replace(".zip", ""), format="zip", root_dir=out_dir)
@@ -58,7 +64,14 @@ def upload_segment(out_dir: Path) -> bool:
             success = upload_zip_to_s3(zip_path, presigned_url)
             if success:
                 print(f"✓ Caricato su S3: {s3_key}")
-                zip_path.unlink(missing_ok=True)  # elimina lo zip locale
+
+                # Sposta lo ZIP in sent/
+                dest_zip = SENT_DIR / zip_path.name
+                shutil.move(str(zip_path), str(dest_zip))
+
+                # Elimina la cartella segmento originale
+                shutil.rmtree(out_dir, ignore_errors=True)
+
                 return True
             else:
                 print("✗ Upload fallito. Ritento tra 30s.")
@@ -75,11 +88,8 @@ def main():
         if not segments:
             print("Nessun segmento da inviare.")
         for seg in segments:
-            if upload_segment(seg):
-                dest = SENT_DIR / seg.name
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.move(str(seg), str(dest))
+            upload_segment(seg)
+               
         time.sleep(15)
 
 if __name__ == "__main__":
