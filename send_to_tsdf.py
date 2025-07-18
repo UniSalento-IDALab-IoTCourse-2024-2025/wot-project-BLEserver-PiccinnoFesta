@@ -5,9 +5,24 @@ from pathlib import Path
 import shutil
 import json
 
+
+
 # ——— CONFIG —————————————————————————
 TSDF_DIR  = Path.home() / "toSendData" / "tsdf_output"
 SENT_DIR  = Path.home() / "toSendData" / "sent"
+
+CONFIG_PATH = Path(__file__).parent / "patient_config.json"
+# Default fallback
+PATIENT_ID = "unknown_patient"
+
+if CONFIG_PATH.exists():
+    try:
+        with open(CONFIG_PATH) as f:
+            data = json.load(f)
+            PATIENT_ID = data.get("patient_id", PATIENT_ID)
+    except Exception as e:
+        print(f"Errore lettura config: {e}")
+
 
 # ——— S3 CONFIG —————————————————————————
 API_GATEWAY_URL = "https://3qpkphed39.execute-api.us-east-1.amazonaws.com/dev"
@@ -17,8 +32,13 @@ SENT_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_presigned_url():
     """Richiede un URL firmato da API Gateway."""
+    if not PATIENT_ID:
+        print("Errore: variabile d'ambiente PATIENT_ID non impostata.")
+        return None, None
+
     try:
-        response = requests.get(f"{API_GATEWAY_URL}/api/raspberry/upload")
+        headers = {"patientid": PATIENT_ID}
+        response = requests.get(f"{API_GATEWAY_URL}/api/raspberry/upload", headers=headers)
         if response.status_code != 200:
             print(f"Errore API Gateway: {response.status_code} - {response.text}")
             return None, None
@@ -34,11 +54,10 @@ def get_presigned_url():
 def upload_zip_to_s3(zip_path: Path, presigned_url: str) -> bool:
     """Effettua l’upload del file ZIP al link firmato."""
     try:
-        headers = {'Content-Type': 'application/zip'} # Add this line
+        headers = {'Content-Type': 'application/zip'}
         with open(zip_path, "rb") as f:
-            put_resp = requests.put(presigned_url, data=f, headers=headers) # Add headers=headers
+            put_resp = requests.put(presigned_url, data=f, headers=headers)
         
-        # It's helpful to print the status code and response text for debugging
         if put_resp.status_code != 200:
             print(f"S3 Upload Error: {put_resp.status_code} - {put_resp.text}")
         
@@ -65,11 +84,8 @@ def upload_segment(out_dir: Path) -> bool:
             if success:
                 print(f"✓ Caricato su S3: {s3_key}")
 
-                # Sposta lo ZIP in sent/
                 dest_zip = SENT_DIR / zip_path.name
                 shutil.move(str(zip_path), str(dest_zip))
-
-                # Elimina la cartella segmento originale
                 shutil.rmtree(out_dir, ignore_errors=True)
 
                 return True
