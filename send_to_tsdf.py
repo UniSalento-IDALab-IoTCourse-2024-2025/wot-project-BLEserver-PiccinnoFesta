@@ -42,10 +42,12 @@ def get_presigned_url():
         if response.status_code != 200:
             print(f"Errore API Gateway: {response.status_code} - {response.text}")
             return None, None
+        
 
-        outer_json = response.json()
-        inner_json = json.loads(outer_json["body"])
-        return inner_json["url"], inner_json["key"]
+        print("Sending header:", headers)
+
+        data = response.json()
+        return data["url"], data["key"]
     except Exception as e:
         print(f"Errore durante richiesta presigned URL: {e}")
         return None, None
