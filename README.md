@@ -42,8 +42,7 @@ L'interfaccia web, esposta da un microservizio sul cloud, e sviluppata con React
 - SmartWatchService: [Smartwatch](https://github.com/UniSalento-IDALab-IoTCourse-2024-2025/wot-project-smartwatch-PiccinnoFesta)
 - BLE server: [BLE Server](https://github.com/UniSalento-IDALab-IoTCourse-2024-2025/wot-project-BLEserver-PiccinnoFesta)
 - Frontend: [Frontend](https://github.com/UniSalento-IDALab-IoTCourse-2024-2025/wot-project-Frontend-PiccinnoFesta)
-- Presentation: [Presentation](https://github.com/UniSalento-IDALab-IoTCourse-2024-2025/wot-project-presentation-PiccinnoFesta)
-
+- Presentation: [Presentation](https://unisalento-idalab-iotcourse-2024-2025.github.io/wot-project-presentation-PiccinnoFesta/)
 ## BLE GATT SERVER (BlueZ Python Server)
 
 Questo progetto realizza un server BLE completo in Python su Linux, basato su BlueZ e D-Bus. Il server riceve dati JSON da un dispositivo remoto (uno smartwatch Android), li bufferizza, li decodifica e li salva in file JSON batchizzati da 400 campioni ciascuno. In seguito li converte in un formato dati adatto all'analisi del modello di machine learning e li carica sul database remoto (*S3*).
