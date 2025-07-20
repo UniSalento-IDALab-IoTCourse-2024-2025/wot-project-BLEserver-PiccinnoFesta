@@ -26,7 +26,6 @@ if CONFIG_PATH.exists():
 
 # ——— S3 CONFIG —————————————————————————
 API_GATEWAY_URL = "https://3qpkphed39.execute-api.us-east-1.amazonaws.com/dev"
-
 TSDF_DIR.mkdir(parents=True, exist_ok=True)
 SENT_DIR.mkdir(parents=True, exist_ok=True)
 
