@@ -42,6 +42,53 @@ L'interfaccia web, esposta da un microservizio sul cloud, e sviluppata con React
 - SmartWatchService: [Smartwatch]([https://esempio.com](https://github.com/UniSalento-IDALab-IoTCourse-2024-2025/wot-project-smartwatch-PiccinnoFesta))
 - BLE server: [BLE Server]([http](https://github.com/UniSalento-IDALab-IoTCourse-2024-2025/wot-project-BLEserver-PiccinnoFesta))
 - Frontend: [Frontend]([http](https://github.com/UniSalento-IDALab-IoTCourse-2024-2025/wot-project-Frontend-PiccinnoFesta))
-  
 
+
+## BLE GATT SERVER (BlueZ Python Server)
+
+Questo progetto realizza un server BLE completo in Python su Linux, basato su BlueZ e D-Bus. Il server riceve dati JSON da un dispositivo remoto (uno smartwatch Android), li bufferizza, li decodifica e li salva in file JSON batchizzati da 400 campioni ciascuno. In seguito li converte in un formato dati adatto all'analisi del modello di machine learning e li carica sul database remoto (*S3*).
+
+### Funzionamento
+
+Il server pubblicizza la propria presenza (**Advertising**) come periferica BLE usando un `Service UUID` personalizzato ed espone una **caratteristica scrivibile** con `UUID` specifico.
+I dati inviati da un client BLE vengono interpretati come stringhe JSON codificate in UTF-8.
+I pacchetti ricevuti vengono bufferizzati e una volta raggiunti i **400 campioni** viene creato un file JSON `segment<batch_id>_raw.json`, salvato poi in una directory locale.
+
+
+Oltre all'esposizione del servizio, ci sono due altri script concorrenti che operano periodicamente per controllare la presenza di file da convertire/inviare e procedere con l'operazione.
+Questi sono:
+
+#### 1) `transform_to_tsdf.py`
+
+Trasforma i dati JSON ricevuti  in un formato binario strutturato (TSDF):
+
+a. **Estrae i dati** da ciascun file, ignorando quelli malformati o incompleti.
+b. **Crea una tabella temporale** dei campioni, convertendo i timestamp assoluti in delta temporali in millisecondi rispetto al primo campione.
+c. **Applica un fattore di scala** ai valori di accelerazione e giroscopio per convertirli in unità fisiche reali.
+d. **Genera tre file binari** per ogni batch:
+   - `IMU_time.bin`: tempi relativi
+   - `IMU_values.bin`: dati accelerometro + giroscopio
+   - `IMU_meta.json`: metadati (soggetto, dispositivo, intervallo temporale, ecc.)
+e. **Svuota la cartella d'origine** cancellando i file processati.
+
+
+
+
+  #### 2) `send_tsdf.py`
+
+**Invia automaticamente i dati dei file  binari** generati dallo script precedente verso un database remoto
+
+La logica è la seguente:
+
+1. **Scansiona** alla ricerca di nuove directory contenenti file binari.
+2. **Comprime ciascun segmento** in un file ZIP (`segmentX.zip`).
+3. **Contatta API GATEWAY** passando l’ID del paziente (letto da un file di configurazione) per richiedere un **presigned URL**, ovvero un link temporaneo autorizzato per l’upload.
+4. **Effettua l’upload del file ZIP** direttamente su Amazon S3 usando il presigned URL ricevuto.
+5. Se l’upload ha successo:
+   - **Sposta il file ZIP nella cartella `sent/`** come archivio.
+   - **Cancella la cartella `segmentX/` originale**.
+6. In caso di errore (es. URL non valido, connessione assente, o fallimento S3):
+   - Attende 30 secondi e riprova automaticamente.
+
+Il file di configurazione `patient_config.json` infine tiene l'informazione sull'identificativo del paziente, per poter caricare i dati sul cloud in directory separate
 
